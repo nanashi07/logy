@@ -153,7 +153,7 @@ impl WrappedFileWriter {
         }
         println!("create file {}", filename);
         WrappedFileWriter {
-            filename: String::new(),
+            filename: filename.to_string(),
             pattern: filename_pattern.to_string(),
             writer: Box::new(BufWriter::new(File::create(filename).unwrap())),
         }
@@ -162,10 +162,20 @@ impl WrappedFileWriter {
         let filename = WrappedFileWriter::as_filename(self.pattern.as_str(), log_hour);
         if self.filename != filename {
             self.writer.flush().unwrap();
+
             if Path::new(&filename).exists() {
                 println!("remove file {}", filename);
                 std::fs::remove_file(&filename).unwrap();
             }
+
+            // check file size and remove zero size file
+            let previous_file = self.filename.as_str();
+            let previous_path = Path::new(previous_file);
+            if previous_path.exists() && previous_path.metadata().unwrap().len() == 0 {
+                println!("remove zero size file: {}", previous_file);
+                std::fs::remove_file(previous_file).unwrap();
+            }
+
             println!("create file {}", filename);
             self.filename = filename;
             self.writer = Box::new(BufWriter::new(File::create(&self.filename).unwrap()));
