@@ -1,33 +1,36 @@
 use std::{
     collections::HashMap,
-    fs::File,
-    io::{BufRead, BufReader, BufWriter, Write},
+    fs::{self, File},
+    io::{BufRead, BufReader, BufWriter, Result, Write},
     path::Path,
 };
 
 use chrono::{Duration, NaiveDateTime};
 use regex::Regex;
 
-fn main() -> std::io::Result<()> {
+fn main() -> Result<()> {
     let files = vec![
         "/Users/nanashi07/Desktop/2021/09/mq-slow/source/app.real-sports-game-internal-7bc8549c5-cg8jj.log",
         "/Users/nanashi07/Desktop/2021/09/mq-slow/source/app.real-sports-game-internal-7bc8549c5-cw58m.log"
     ];
     let pattern = "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}.\\d{3}";
     let log_time_format = "%Y-%m-%d %H:%M:%S%.3f";
+    let output_file_pattern = "app.%Y%m%d-%H.log";
+
     read_and_print(&files)?;
     println!("======================================================================================================");
     read_and_print2(&files, pattern)?;
     println!("======================================================================================================");
     read_and_print3(&files, pattern)?;
     println!("======================================================================================================");
-    read_and_print4(&files, pattern, log_time_format)?;
+    read_and_print4(&files, pattern, log_time_format, output_file_pattern)?;
     println!("======================================================================================================");
+
     Ok(())
 }
 
 /// read files by directly buffer reader
-fn read_and_print(files: &Vec<&str>) -> std::io::Result<()> {
+fn read_and_print(files: &Vec<&str>) -> Result<()> {
     let file = File::open(files[0])?;
     let mut buffer_reader = BufReader::new(file);
     let mut line = String::new();
@@ -43,7 +46,7 @@ fn read_and_print(files: &Vec<&str>) -> std::io::Result<()> {
 }
 
 /// read file by wrapper
-fn read_and_print2(files: &Vec<&str>, pattern: &str) -> std::io::Result<()> {
+fn read_and_print2(files: &Vec<&str>, pattern: &str) -> Result<()> {
     let file = files[0];
     let mut file_reader = WrappedFileReader {
         file: file.to_string(),
@@ -63,7 +66,7 @@ fn read_and_print2(files: &Vec<&str>, pattern: &str) -> std::io::Result<()> {
 }
 
 /// read file by wrapper with new()
-fn read_and_print3(files: &Vec<&str>, pattern: &str) -> std::io::Result<()> {
+fn read_and_print3(files: &Vec<&str>, pattern: &str) -> Result<()> {
     let file = files[0];
     let mut file_reader = WrappedFileReader::new(file, pattern);
     let mut count = 0;
@@ -78,14 +81,19 @@ fn read_and_print3(files: &Vec<&str>, pattern: &str) -> std::io::Result<()> {
 }
 
 /// read multiple files
-fn read_and_print4(files: &Vec<&str>, pattern: &str, log_time_format: &str) -> std::io::Result<()> {
+fn read_and_print4(
+    files: &Vec<&str>,
+    pattern: &str,
+    log_time_format: &str,
+    output_file_pattern: &str,
+) -> Result<()> {
     let mut readers = files
         .iter()
         .map(|&path| WrappedFileReader::new(path, pattern))
         .collect::<Vec<WrappedFileReader>>();
 
     let mut map: HashMap<String, String> = HashMap::new();
-    let mut writer = WrappedFileWriter::new("aa.%Y%m%d-%H.log");
+    let mut writer = WrappedFileWriter::new(output_file_pattern);
 
     loop {
         readers.iter_mut().for_each(|reader| {
@@ -149,7 +157,7 @@ impl WrappedFileWriter {
         let filename = f.as_str();
         if Path::new(filename).exists() {
             println!("remove file {}", filename);
-            std::fs::remove_file(filename).unwrap();
+            fs::remove_file(filename).unwrap();
         }
         println!("create file {}", filename);
         WrappedFileWriter {
@@ -165,7 +173,7 @@ impl WrappedFileWriter {
 
             if Path::new(&filename).exists() {
                 println!("remove file {}", filename);
-                std::fs::remove_file(&filename).unwrap();
+                fs::remove_file(&filename).unwrap();
             }
 
             // check file size and remove zero size file
@@ -173,7 +181,7 @@ impl WrappedFileWriter {
             let previous_path = Path::new(previous_file);
             if previous_path.exists() && previous_path.metadata().unwrap().len() == 0 {
                 println!("remove zero size file: {}", previous_file);
-                std::fs::remove_file(previous_file).unwrap();
+                fs::remove_file(previous_file).unwrap();
             }
 
             println!("create file {}", filename);
