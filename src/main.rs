@@ -6,6 +6,7 @@ use std::{
 };
 
 use chrono::{Duration, NaiveDateTime};
+use flate2::{write::GzEncoder, Compression};
 use regex::Regex;
 
 fn main() -> Result<()> {
@@ -24,6 +25,8 @@ fn main() -> Result<()> {
     read_and_print3(&files, pattern)?;
     println!("======================================================================================================");
     read_and_print4(&files, pattern, log_time_format, output_file_pattern)?;
+    println!("======================================================================================================");
+    read_and_print5(&files, pattern, log_time_format, output_file_pattern)?;
     println!("======================================================================================================");
 
     Ok(())
@@ -93,7 +96,58 @@ fn read_and_print4(
         .collect::<Vec<WrappedFileReader>>();
 
     let mut map: HashMap<String, String> = HashMap::new();
-    let mut writer = WrappedFileWriter::new(output_file_pattern);
+    let mut writer = WrappedFileWriter::new(output_file_pattern, false);
+
+    loop {
+        readers.iter_mut().for_each(|reader| {
+            let filename = reader.filename();
+            if !map.contains_key(&filename) || map[&filename].is_empty() {
+                if let Log::Line(line) = reader.next_log() {
+                    map.insert(filename, line);
+                } else {
+                    map.remove(&filename);
+                }
+            }
+        });
+
+        if map.is_empty() {
+            break;
+        } else {
+            let pair = map
+                .iter()
+                .map(|e| Pair::new(e.0, e.1)) // create new ref object to avoid borrow from
+                .min_by(|a, b| a.value.cmp(&b.value))
+                .unwrap();
+
+            let log_time =
+                NaiveDateTime::parse_from_str(&pair.value[0..23], log_time_format).unwrap();
+            let log_hour = log_time.timestamp() / Duration::hours(1).num_seconds();
+
+            writer.write(log_hour, &pair.value);
+
+            map.remove(&pair.key);
+        }
+    }
+
+    writer.flush();
+
+    Ok(())
+}
+
+/// read multiple files and compress output
+fn read_and_print5(
+    files: &Vec<&str>,
+    pattern: &str,
+    log_time_format: &str,
+    output_file_pattern: &str,
+) -> Result<()> {
+    let mut readers = files
+        .iter()
+        .map(|&path| WrappedFileReader::new(path, pattern))
+        .collect::<Vec<WrappedFileReader>>();
+
+    let mut map: HashMap<String, String> = HashMap::new();
+    let mut writer = WrappedFileWriter::new(output_file_pattern, true);
 
     loop {
         readers.iter_mut().for_each(|reader| {
@@ -146,28 +200,33 @@ impl Pair {
 }
 
 struct WrappedFileWriter {
+    encode: bool,
     filename: String,
     pattern: String,
-    writer: Box<BufWriter<File>>,
+    writer: Box<dyn Write>,
 }
 
 impl WrappedFileWriter {
-    pub fn new(filename_pattern: &str) -> WrappedFileWriter {
-        let f = WrappedFileWriter::as_filename(filename_pattern, 0);
-        let filename = f.as_str();
+    pub fn new(filename_pattern: &str, encode: bool) -> WrappedFileWriter {
+        let file = WrappedFileWriter::as_filename(filename_pattern, 0, encode);
+        let filename = file.as_str();
+
         if Path::new(filename).exists() {
             println!("remove file {}", filename);
             fs::remove_file(filename).unwrap();
         }
         println!("create file {}", filename);
+
         WrappedFileWriter {
+            encode,
             filename: filename.to_string(),
             pattern: filename_pattern.to_string(),
-            writer: Box::new(BufWriter::new(File::create(filename).unwrap())),
+            writer: WrappedFileWriter::create_writer(filename, encode),
         }
     }
+
     pub fn write(&mut self, log_hour: i64, line: &str) {
-        let filename = WrappedFileWriter::as_filename(self.pattern.as_str(), log_hour);
+        let filename = WrappedFileWriter::as_filename(self.pattern.as_str(), log_hour, self.encode);
         if self.filename != filename {
             self.writer.flush().unwrap();
 
@@ -186,15 +245,30 @@ impl WrappedFileWriter {
 
             println!("create file {}", filename);
             self.filename = filename;
-            self.writer = Box::new(BufWriter::new(File::create(&self.filename).unwrap()));
+            self.writer = WrappedFileWriter::create_writer(self.filename.as_str(), self.encode)
         }
-        writeln!(self.writer, "{}", line).unwrap();
+        self.writer.write_all(line.as_bytes()).unwrap();
+        // writeln!(self.writer, "{}", line).unwrap();
     }
-    fn as_filename(log_file_pattern: &str, log_hour: i64) -> String {
+
+    fn as_filename(log_file_pattern: &str, log_hour: i64, encode: bool) -> String {
+        let pattern = log_file_pattern.to_owned() + if encode { ".gz" } else { "" };
         let file_time =
             NaiveDateTime::from_timestamp(log_hour * Duration::hours(1).num_seconds(), 0);
-        format!("{}", file_time.format(log_file_pattern))
+        format!("{}", file_time.format(pattern.as_str()))
     }
+
+    fn create_writer(filename: &str, encode: bool) -> Box<dyn Write> {
+        if encode {
+            Box::new(GzEncoder::new(
+                BufWriter::new(File::create(filename).unwrap()),
+                Compression::best(),
+            ))
+        } else {
+            Box::new(BufWriter::new(File::create(filename).unwrap()))
+        }
+    }
+
     fn flush(&mut self) {
         self.writer.flush().unwrap();
     }
