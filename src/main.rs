@@ -1,10 +1,10 @@
 use std::{
     cmp::{self},
     collections::HashMap,
-    env,
     fs::{self, File},
     io::{BufRead, BufReader, BufWriter, Result, Write},
     path::Path,
+    vec,
 };
 
 use chrono::{Duration, NaiveDateTime};
@@ -12,37 +12,52 @@ use flate2::{bufread::GzDecoder, write::GzEncoder, Compression};
 use regex::Regex;
 
 fn main() -> Result<()> {
-    let files = vec![
-        "/Users/nanashi07/Desktop/2021/09/mq-slow/source/app.real-sports-game-internal-7bc8549c5-cg8jj.log",
-        "/Users/nanashi07/Desktop/2021/09/mq-slow/source/app.real-sports-game-internal-7bc8549c5-cw58m.log"
-    ];
+    do_reduce_source_log()?;
+    Ok(())
+}
+
+fn do_reduce_source_log() -> Result<()> {
+    let source_path = "/Users/nanashi07/Desktop/2021/09/slow-ke-facts/source";
+    let files = if Path::new(source_path).is_dir() {
+        fs::read_dir(source_path)?
+            .into_iter()
+            .map(|p| p.unwrap())
+            .map(|p| p.path())
+            .filter(|p| p.is_file())
+            .filter(|p| p.extension().map(|s| s == "log").unwrap_or(false))
+            .map(|p| p.display().to_string())
+            .collect::<Vec<String>>()
+    } else {
+        vec![source_path.to_string()]
+    };
+
+    let pattern = "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}.\\d{3}";
+    let log_time_format = "%Y-%m-%d %H:%M:%S%.3f";
+    let trace_pattern = "\\[real-sports-game-internal-\\w+-\\w+,(\\w+,\\w+)\\]";
+    let output_file_pattern =
+        "/Users/nanashi07/Desktop/2021/09/slow-ke-facts/reduced/app.%Y%m%d-%H.log";
+    let group_file_pattern = "group.%Y%m%d-%H.log";
+
+    read_and_print5(
+        &files.iter().map(|s| s.as_str()).collect(),
+        pattern,
+        log_time_format,
+        output_file_pattern,
+    )?;
+
+    Ok(())
+}
+
+fn find_long_log() -> Result<()> {
+    let source_path = "/Users/nanashi07/Desktop/2021/09/slow-ke-facts/reduced";
+
     let pattern = "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}.\\d{3}";
     let log_time_format = "%Y-%m-%d %H:%M:%S%.3f";
     let trace_pattern = "\\[real-sports-game-internal-\\w+-\\w+,(\\w+,\\w+)\\]";
     let output_file_pattern = "app.%Y%m%d-%H.log";
     let group_file_pattern = "group.%Y%m%d-%H.log";
 
-    read_and_print(&files)?;
-    println!("======================================================================================================");
-    read_and_print2(&files, pattern)?;
-    println!("======================================================================================================");
-    read_and_print3(&files, pattern)?;
-    println!("======================================================================================================");
-    read_and_print4(&files, pattern, log_time_format, output_file_pattern)?;
-    println!("======================================================================================================");
-    read_and_print5(&files, pattern, log_time_format, output_file_pattern)?;
-    println!("======================================================================================================");
-
-    let path = Path::new("/etc/resolv.conf");
-
-    assert!(path.ends_with("resolv.conf"));
-    assert!(path.ends_with("etc/resolv.conf"));
-    assert!(path.ends_with("/etc/resolv.conf"));
-
-    assert!(!path.ends_with("/resolv.conf"));
-
-    let running_path = env::current_dir()?;
-    let sorted_logs = fs::read_dir(running_path)?
+    let sorted_logs = fs::read_dir(source_path)?
         .into_iter()
         .map(|p| p.unwrap())
         .map(|p| p.path())
@@ -54,6 +69,7 @@ fn main() -> Result<()> {
     let logs = sorted_logs.iter().map(|s| s.as_str()).collect();
     read_compress_and_group(
         &logs,
+        1000,
         pattern,
         log_time_format,
         trace_pattern,
@@ -142,22 +158,19 @@ fn read_and_print4(
             }
         });
 
-        if map.is_empty() {
-            break;
-        } else {
-            let pair = map
-                .iter()
-                .map(|e| Pair::new(e.0, e.1)) // create new ref object to avoid borrow from
-                .min_by(|a, b| a.value.cmp(&b.value))
-                .unwrap();
-
-            let log_time =
-                NaiveDateTime::parse_from_str(&pair.value[0..23], log_time_format).unwrap(); // TODO: slice time issue, need by variable
+        if let Option::Some((key, value)) = map
+            .iter()
+            .min_by(|(_, v1), (_, v2)| v1.cmp(v2))
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+        {
+            let log_time = NaiveDateTime::parse_from_str(&value[0..23], log_time_format).unwrap(); // TODO: slice time issue, need by variable
             let log_hour = log_time.timestamp() / Duration::hours(1).num_seconds();
 
-            writer.write(log_hour, &pair.value);
+            writer.write(log_hour, &value);
 
-            map.remove(&pair.key);
+            map.remove(&key);
+        } else {
+            break;
         }
     }
 
@@ -193,22 +206,19 @@ fn read_and_print5(
             }
         });
 
-        if map.is_empty() {
-            break;
-        } else {
-            let pair = map
-                .iter()
-                .map(|e| Pair::new(e.0, e.1)) // create new ref object to avoid borrow from
-                .min_by(|a, b| a.value.cmp(&b.value))
-                .unwrap();
-
-            let log_time =
-                NaiveDateTime::parse_from_str(&pair.value[0..23], log_time_format).unwrap(); // TODO: slice time issue, need by variable
+        if let Option::Some((key, value)) = map
+            .iter()
+            .min_by(|&(_, v1), &(_, v2)| v1.cmp(v2))
+            .map(|(k, v)| (k.clone(), v.clone()))
+        {
+            let log_time = NaiveDateTime::parse_from_str(&value[0..23], log_time_format).unwrap(); // TODO: slice time issue, need by variable
             let log_hour = log_time.timestamp() / Duration::hours(1).num_seconds();
 
-            writer.write(log_hour, &pair.value);
+            writer.write(log_hour, &value);
 
-            map.remove(&pair.key);
+            map.remove(&key);
+        } else {
+            break;
         }
     }
 
@@ -219,6 +229,7 @@ fn read_and_print5(
 
 fn read_compress_and_group(
     files: &Vec<&str>,
+    min_cost_time: i64,
     pattern: &str,
     log_time_format: &str,
     trace_pattern: &str,
@@ -228,12 +239,12 @@ fn read_compress_and_group(
     let re = Regex::new(trace_pattern).unwrap();
 
     for &file in files {
-        println!("Load file {}", file);
+        println!("Load file {} to collect cost time", file);
         let mut reader = WrappedFileReader::new(file, pattern, true);
         while let Log::Line(line) = reader.next_log() {
             match re.captures(line.as_str()) {
                 Some(captures) => {
-                    let trace_id = captures.get(1).map_or("", |m| m.as_str()).to_string();
+                    let trace_id = captures.get(1).unwrap().as_str().to_string();
                     // TODO: slice time issue, need by variable
                     let log_time =
                         NaiveDateTime::parse_from_str(&line.clone()[0..23], log_time_format)
@@ -265,9 +276,10 @@ fn read_compress_and_group(
             }
         }
 
+        println!("{} entries collected", map.len());
         let filtered = map
             .values()
-            .filter(|&d| d.end_time - d.start_time > 1000)
+            .filter(|&d| d.end_time - d.start_time > min_cost_time)
             .map(|d| {
                 (
                     d.trace_id.to_string(),
@@ -279,26 +291,17 @@ fn read_compress_and_group(
                 )
             })
             .collect::<HashMap<String, LogDuration>>();
-
-        for duration in filtered.values() {
-            println!(
-                "{:?}, {} ~ {}",
-                duration.trace_id,
-                NaiveDateTime::from_timestamp(
-                    duration.start_time / 1000,
-                    (duration.start_time % 1000 * 1_000_000) as u32
-                ),
-                NaiveDateTime::from_timestamp(
-                    duration.end_time / 1000,
-                    (duration.end_time % 1000 * 1_000_000) as u32
-                )
-            );
-        }
+        println!(
+            "{} entries cost time over than {}",
+            filtered.len(),
+            min_cost_time
+        );
 
         let mut grouped_logs: HashMap<String, Vec<String>> = HashMap::new();
         reader = WrappedFileReader::new(file, pattern, true);
         let mut writer = WrappedFileWriter::new(output_file_pattern, false);
 
+        println!("start to output time cost logs from {}", file);
         while let Log::Line(line) = reader.next_log() {
             match re.captures(line.as_str()) {
                 Some(captures) => {
@@ -344,6 +347,7 @@ fn read_compress_and_group(
                 None => {}
             }
         }
+        println!("finish output time cost logs from {}", file);
     }
 
     Ok(())
@@ -354,20 +358,6 @@ struct LogDuration {
     trace_id: String,
     start_time: i64,
     end_time: i64,
-}
-
-struct Pair {
-    key: String,
-    value: String,
-}
-
-impl Pair {
-    pub fn new(key: &String, value: &String) -> Pair {
-        Pair {
-            key: key.to_string(),
-            value: value.to_string(),
-        }
-    }
 }
 
 struct WrappedFileWriter {
@@ -442,6 +432,10 @@ impl WrappedFileWriter {
     }
 
     fn create_writer(filename: &str, compressed: bool) -> Box<dyn Write> {
+        if !Path::new(filename).parent().unwrap().exists() {
+            fs::create_dir_all(Path::new(filename).parent().unwrap()).unwrap();
+        }
+
         if compressed {
             Box::new(GzEncoder::new(
                 BufWriter::new(File::create(filename).unwrap()),
