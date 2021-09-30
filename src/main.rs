@@ -9,15 +9,17 @@ use std::{
 
 use chrono::{Duration, NaiveDateTime};
 use flate2::{bufread::GzDecoder, write::GzEncoder, Compression};
+use log::info;
 use regex::Regex;
 
 fn main() -> Result<()> {
+    env_logger::init();
     do_reduce_source_log()?;
     Ok(())
 }
 
 fn do_reduce_source_log() -> Result<()> {
-    let source_path = "/Users/nanashi07/Desktop/2021/09/slow-ke-facts/source";
+    let source_path = "/Users/nanashi07/Desktop/2021/09/big/real/source";
     let files = if Path::new(source_path).is_dir() {
         fs::read_dir(source_path)?
             .into_iter()
@@ -33,10 +35,8 @@ fn do_reduce_source_log() -> Result<()> {
 
     let pattern = "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}.\\d{3}";
     let log_time_format = "%Y-%m-%d %H:%M:%S%.3f";
-    let trace_pattern = "\\[real-sports-game-internal-\\w+-\\w+,(\\w+,\\w+)\\]";
     let output_file_pattern =
-        "/Users/nanashi07/Desktop/2021/09/slow-ke-facts/reduced/app.%Y%m%d-%H.log";
-    let group_file_pattern = "group.%Y%m%d-%H.log";
+        "/Users/nanashi07/Desktop/2021/09/big/real/target/app.realsports.%Y%m%d-%H.log";
 
     read_and_print5(
         &files.iter().map(|s| s.as_str()).collect(),
@@ -65,7 +65,7 @@ fn find_long_log() -> Result<()> {
         .filter(|p| p.extension().map(|s| s == "gz").unwrap_or(false))
         .map(|p| p.display().to_string())
         .collect::<Vec<String>>();
-    // println!("{:?}", sorted_logs);
+    // info!("{:?}", sorted_logs);
     let logs = sorted_logs.iter().map(|s| s.as_str()).collect();
     read_compress_and_group(
         &logs,
@@ -75,7 +75,7 @@ fn find_long_log() -> Result<()> {
         trace_pattern,
         group_file_pattern,
     )?;
-    println!("======================================================================================================");
+    info!("======================================================================================================");
 
     Ok(())
 }
@@ -87,7 +87,7 @@ fn read_and_print(files: &Vec<&str>) -> Result<()> {
     let mut line = String::new();
     let mut count = 0;
     while buffer_reader.read_line(&mut line)? > 0 && count < 100 {
-        println!("read_and_print = {}", line);
+        info!("read_and_print = {}", line);
         count = count + 1;
         if count > 10 {
             break;
@@ -107,7 +107,7 @@ fn read_and_print2(files: &Vec<&str>, pattern: &str) -> Result<()> {
     };
     let mut count = 0;
     while let Log::Line(line) = file_reader.next_log() {
-        println!("read_and_print2 = {:?}", line);
+        info!("read_and_print2 = {:?}", line);
         count = count + 1;
         if count > 10 {
             break;
@@ -122,7 +122,7 @@ fn read_and_print3(files: &Vec<&str>, pattern: &str) -> Result<()> {
     let mut file_reader = WrappedFileReader::new(file, pattern, false);
     let mut count = 0;
     while let Log::Line(line) = file_reader.next_log() {
-        println!("read_and_print3 = {:?}", line);
+        info!("read_and_print3 = {:?}", line);
         count = count + 1;
         if count > 10 {
             break;
@@ -239,7 +239,7 @@ fn read_compress_and_group(
     let re = Regex::new(trace_pattern).unwrap();
 
     for &file in files {
-        println!("Load file {} to collect cost time", file);
+        info!("Load file {} to collect cost time", file);
         let mut reader = WrappedFileReader::new(file, pattern, true);
         while let Log::Line(line) = reader.next_log() {
             match re.captures(line.as_str()) {
@@ -276,7 +276,7 @@ fn read_compress_and_group(
             }
         }
 
-        println!("{} entries collected", map.len());
+        info!("{} entries collected", map.len());
         let filtered = map
             .values()
             .filter(|&d| d.end_time - d.start_time > min_cost_time)
@@ -291,7 +291,7 @@ fn read_compress_and_group(
                 )
             })
             .collect::<HashMap<String, LogDuration>>();
-        println!(
+        info!(
             "{} entries cost time over than {}",
             filtered.len(),
             min_cost_time
@@ -301,7 +301,7 @@ fn read_compress_and_group(
         reader = WrappedFileReader::new(file, pattern, true);
         let mut writer = WrappedFileWriter::new(output_file_pattern, false);
 
-        println!("start to output time cost logs from {}", file);
+        info!("start to output time cost logs from {}", file);
         while let Log::Line(line) = reader.next_log() {
             match re.captures(line.as_str()) {
                 Some(captures) => {
@@ -347,7 +347,7 @@ fn read_compress_and_group(
                 None => {}
             }
         }
-        println!("finish output time cost logs from {}", file);
+        info!("finish output time cost logs from {}", file);
     }
 
     Ok(())
@@ -379,10 +379,10 @@ impl WrappedFileWriter {
         let filename = file.as_str();
 
         if Path::new(filename).exists() {
-            println!("remove file {}", filename);
+            info!("remove file {}", filename);
             fs::remove_file(filename).unwrap();
         }
-        println!("create file {}", filename);
+        info!("create file {}", filename);
 
         WrappedFileWriter {
             compressed,
@@ -400,7 +400,7 @@ impl WrappedFileWriter {
             self.writer.flush().unwrap();
 
             if Path::new(&filename).exists() {
-                println!("remove file {}", filename);
+                info!("remove file {}", filename);
                 fs::remove_file(&filename).unwrap();
             }
 
@@ -411,11 +411,11 @@ impl WrappedFileWriter {
                 && (previous_path.metadata().unwrap().len() == 0
                     || (self.compressed && self.empty_content))
             {
-                println!("remove zero size file: {}", previous_file);
+                info!("remove zero size file: {}", previous_file);
                 fs::remove_file(previous_file).unwrap();
             }
 
-            println!("create file {}", filename);
+            info!("create file {}", filename);
             self.filename = filename;
             self.writer = WrappedFileWriter::create_writer(self.filename.as_str(), self.compressed)
         }
