@@ -4,7 +4,7 @@ use std::{
     fs::{self, File},
     io::{BufRead, BufReader, BufWriter, Result, Write},
     path::Path,
-    vec,
+    string, vec,
 };
 
 use chrono::{Duration, NaiveDateTime};
@@ -188,24 +188,31 @@ fn read_and_print5(
 ) -> Result<()> {
     let mut readers = files
         .iter()
-        .map(|&path| WrappedFileReader::new(path, pattern, false))
-        .collect::<Vec<WrappedFileReader>>();
+        .map(|&path| {
+            (
+                path.to_string(),
+                WrappedFileReader::new(path, pattern, false),
+            )
+        })
+        .collect::<HashMap<String, WrappedFileReader>>();
 
+    let mut last_reader: String = String::new();
     let mut map: HashMap<String, String> = HashMap::new();
     let mut writer = WrappedFileWriter::new(output_file_pattern, true);
 
-    loop {
-        readers.iter_mut().for_each(|reader| {
-            let filename = reader.filename();
-            if !map.contains_key(&filename) || map[&filename].is_empty() {
-                if let Log::Line(line) = reader.next_log() {
-                    map.insert(filename, line);
-                } else {
-                    map.remove(&filename);
-                }
+    // read all head line
+    readers.values_mut().for_each(|reader| {
+        let filename = reader.filename();
+        if !map.contains_key(&filename) || map[&filename].is_empty() {
+            if let Log::Line(line) = reader.next_log() {
+                map.insert(filename, line);
+            } else {
+                map.remove(&filename);
             }
-        });
+        }
+    });
 
+    loop {
         if let Option::Some((key, value)) = map
             .iter()
             .min_by(|&(_, v1), &(_, v2)| v1.cmp(v2))
@@ -216,9 +223,19 @@ fn read_and_print5(
 
             writer.write(log_hour, &value);
 
-            map.remove(&key);
+            // map.remove(&key);
+            last_reader = key.to_string();
         } else {
             break;
+        }
+
+        // read next
+        let reader = readers.get_mut(&last_reader).unwrap();
+        let filename = reader.filename();
+        if let Log::Line(line) = reader.next_log() {
+            map.insert(filename, line);
+        } else {
+            map.remove(&filename);
         }
     }
 
