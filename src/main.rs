@@ -1,5 +1,5 @@
 use std::{
-    cmp::{self},
+    cmp::{self, min},
     collections::{BTreeSet, HashMap},
     fmt::Display,
     fs::{self, File},
@@ -59,9 +59,9 @@ fn read_and_print5(
     log_time_format: &str,
     output_file_pattern: &str,
 ) -> Result<()> {
-    let mut writer = WrappedFileWriter::new(output_file_pattern, true);
+    let mut writer = WrappedFileWriter::new(output_file_pattern, 1);
 
-    let (tx, rx) = mpsc::sync_channel::<String>(500);
+    let (tx, rx) = mpsc::sync_channel::<String>(100);
     let files = files
         .iter()
         .map(|&s| s.to_string())
@@ -234,7 +234,7 @@ fn read_compress_and_group(
 
         let mut grouped_logs: HashMap<String, Vec<String>> = HashMap::new();
         reader = WrappedFileReader::new(file, pattern, true);
-        let mut writer = WrappedFileWriter::new(output_file_pattern, false);
+        let mut writer = WrappedFileWriter::new(output_file_pattern, 0);
 
         info!("start to output time cost logs from {}", file);
         while let Log::Line(line) = reader.next_log() {
@@ -296,8 +296,8 @@ struct LogDuration {
 }
 
 struct WrappedFileWriter {
-    // controls output file is compressed if true
-    compressed: bool,
+    // controls output file is compressed, value is from 0 to 9
+    compress_level: u32,
     // last output file name
     filename: String,
     // outout file name pattern
@@ -309,8 +309,8 @@ struct WrappedFileWriter {
 }
 
 impl WrappedFileWriter {
-    pub fn new(filename_pattern: &str, compressed: bool) -> WrappedFileWriter {
-        let file = WrappedFileWriter::as_filename(filename_pattern, 0, compressed);
+    pub fn new(filename_pattern: &str, compress_level: u32) -> WrappedFileWriter {
+        let file = WrappedFileWriter::as_filename(filename_pattern, 0, compress_level);
         let filename = file.as_str();
 
         if Path::new(filename).exists() {
@@ -320,17 +320,17 @@ impl WrappedFileWriter {
         info!("create file {}", filename);
 
         WrappedFileWriter {
-            compressed,
+            compress_level,
             filename: filename.to_string(),
             pattern: filename_pattern.to_string(),
             empty_content: true,
-            writer: WrappedFileWriter::create_writer(filename, compressed),
+            writer: WrappedFileWriter::create_writer(filename, compress_level),
         }
     }
 
     pub fn write(&mut self, log_hour: i64, line: &str) {
         let filename =
-            WrappedFileWriter::as_filename(self.pattern.as_str(), log_hour, self.compressed);
+            WrappedFileWriter::as_filename(self.pattern.as_str(), log_hour, self.compress_level);
         if self.filename != filename {
             self.writer.flush().unwrap();
 
@@ -344,7 +344,7 @@ impl WrappedFileWriter {
             let previous_path = Path::new(previous_file);
             if previous_path.exists()
                 && (previous_path.metadata().unwrap().len() == 0
-                    || (self.compressed && self.empty_content))
+                    || (self.compress_level > 0 && self.empty_content))
             {
                 info!("remove zero size file: {}", previous_file);
                 fs::remove_file(previous_file).unwrap();
@@ -352,29 +352,30 @@ impl WrappedFileWriter {
 
             info!("create file {}", filename);
             self.filename = filename;
-            self.writer = WrappedFileWriter::create_writer(self.filename.as_str(), self.compressed)
+            self.writer =
+                WrappedFileWriter::create_writer(self.filename.as_str(), self.compress_level)
         }
         // self.writer.write_all(line.as_bytes()).unwrap();
         writeln!(self.writer, "{}", line).unwrap();
         self.empty_content = false
     }
 
-    fn as_filename(log_file_pattern: &str, log_hour: i64, compressed: bool) -> String {
-        let pattern = log_file_pattern.to_owned() + if compressed { ".gz" } else { "" };
+    fn as_filename(log_file_pattern: &str, log_hour: i64, compress_level: u32) -> String {
+        let pattern = log_file_pattern.to_owned() + if compress_level > 0 { ".gz" } else { "" };
         let file_time =
             NaiveDateTime::from_timestamp(log_hour * Duration::hours(1).num_seconds(), 0);
         format!("{}", file_time.format(pattern.as_str()))
     }
 
-    fn create_writer(filename: &str, compressed: bool) -> Box<dyn Write> {
+    fn create_writer(filename: &str, compress_level: u32) -> Box<dyn Write> {
         if !Path::new(filename).parent().unwrap().exists() {
             fs::create_dir_all(Path::new(filename).parent().unwrap()).unwrap();
         }
 
-        if compressed {
+        if compress_level > 0 {
             Box::new(GzEncoder::new(
                 BufWriter::new(File::create(filename).unwrap()),
-                Compression::best(),
+                Compression::new(min(9, compress_level)),
             ))
         } else {
             Box::new(BufWriter::new(File::create(filename).unwrap()))
