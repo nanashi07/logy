@@ -1,3 +1,8 @@
+use chrono::{Duration, NaiveDateTime};
+use clap::{App, Arg, ArgMatches, SubCommand};
+use flate2::{bufread::GzDecoder, write::GzEncoder, Compression};
+use log::{debug, error, info};
+use regex::Regex;
 use std::{
     cmp::{self, min},
     collections::{BTreeSet, HashMap},
@@ -9,57 +14,85 @@ use std::{
     thread, vec,
 };
 
-use chrono::{Duration, NaiveDateTime};
-use flate2::{bufread::GzDecoder, write::GzEncoder, Compression};
-use log::{debug, info};
-use regex::Regex;
-
 fn main() -> Result<()> {
-    env_logger::init();
-    do_reduce_source_log()?;
+    let app = command_args();
 
-    info!("task done");
+    env_logger::init();
+
+    if let Some(args) = app.subcommand_matches("reduce") {
+        if let Some(files) = args.values_of("files") {
+            reduce_logs(
+                &files.collect(),
+                args.value_of("prefix").unwrap(),
+                args.value_of("log-time-format").unwrap(),
+                args.value_of("out-file-pattern").unwrap(),
+                args.value_of("compress-level")
+                    .unwrap()
+                    .parse::<u32>()
+                    .unwrap(),
+            )?;
+        } else {
+            error!("No source file provided");
+            return Ok(());
+        }
+        info!("task done");
+    } else if let Some(args) = app.subcommand_matches("long") {
+        // TODO
+    }
+
     Ok(())
 }
 
-fn do_reduce_source_log() -> Result<()> {
-    let source_path = "/Users/nanashi07/Desktop/2021/09/big/real/source";
-    let files = if Path::new(source_path).is_dir() {
-        fs::read_dir(source_path)?
-            .into_iter()
-            .map(|p| p.unwrap())
-            .map(|p| p.path())
-            .filter(|p| p.is_file())
-            .filter(|p| p.extension().map(|s| s == "log").unwrap_or(false))
-            .map(|p| p.display().to_string())
-            .collect::<Vec<String>>()
-    } else {
-        vec![source_path.to_string()]
-    };
-
-    let pattern = "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}.\\d{3}";
-    let log_time_format = "%Y-%m-%d %H:%M:%S%.3f";
-    let output_file_pattern =
-        "/Users/nanashi07/Desktop/2021/09/big/real/target/app.realsports.%Y%m%d-%H.log";
-
-    read_and_print5(
-        &files.iter().map(|s| s.as_str()).collect(),
-        pattern,
-        log_time_format,
-        output_file_pattern,
-    )?;
-
-    Ok(())
+fn command_args<'a>() -> ArgMatches<'a> {
+    App::new("logy")
+        .version("0.0.1")
+        .author("Bruce Tsai")
+        .subcommand(
+            SubCommand::with_name("reduce")
+                .about("Reduce multiple log files into single one")
+                .args(&[
+                    Arg::with_name("prefix")
+                        .short("p")
+                        .long("prefix")
+                        .takes_value(true)
+                        .help("Prefix pattern to determin start of log line")
+                        .default_value("^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}.\\d{3}"),
+                    Arg::with_name("log-time-format")
+                        .short("t")
+                        .long("log-time")
+                        .takes_value(true)
+                        .help("Log time format to parse")
+                        .default_value("%Y-%m-%d %H:%M:%S%.3f"),
+                    Arg::with_name("out-file-pattern")
+                        .short("o")
+                        .long("out-files")
+                        .takes_value(true)
+                        .help("Output file pattern")
+                        .default_value("output.%Y%m%d-%H.log"),
+                    Arg::with_name("compress-level")
+                        .short("c")
+                        .long("compress")
+                        .takes_value(true)
+                        .help("Compress level for output files")
+                        .default_value("9"),
+                    Arg::with_name("files")
+                        .required(true)
+                        .multiple(true)
+                        .help("Target files for reduce"),
+                ]),
+        )
+        .get_matches()
 }
 
 /// read multiple files and compress output
-fn read_and_print5(
+fn reduce_logs(
     files: &Vec<&str>,
     pattern: &str,
     log_time_format: &str,
     output_file_pattern: &str,
+    compress_level: u32,
 ) -> Result<()> {
-    let mut writer = WrappedFileWriter::new(output_file_pattern, 1);
+    let mut writer = WrappedFileWriter::new(output_file_pattern, compress_level);
 
     let (tx, rx) = mpsc::sync_channel::<String>(100);
     let files = files
