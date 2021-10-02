@@ -1,10 +1,12 @@
 use std::{
     cmp::{self},
-    collections::{HashMap, LinkedList},
+    collections::{BTreeSet, HashMap},
+    fmt::Display,
     fs::{self, File},
     io::{BufRead, BufReader, BufWriter, Result, Write},
     path::Path,
-    string, vec,
+    sync::mpsc::{self},
+    thread, vec,
 };
 
 use chrono::{Duration, NaiveDateTime};
@@ -57,59 +59,92 @@ fn read_and_print5(
     log_time_format: &str,
     output_file_pattern: &str,
 ) -> Result<()> {
-    let mut readers = files
-        .iter()
-        .map(|&path| {
-            (
-                path.to_string(),
-                WrappedFileReader::new(path, pattern, false),
-            )
-        })
-        .collect::<HashMap<String, WrappedFileReader>>();
-
-    let mut last_reader: String = String::new();
-    let mut map: HashMap<String, String> = HashMap::new();
     let mut writer = WrappedFileWriter::new(output_file_pattern, true);
 
-    // read all head line
-    readers.values_mut().for_each(|reader| {
-        let filename = reader.filename();
-        if !map.contains_key(&filename) || map[&filename].is_empty() {
-            if let Log::Line(line) = reader.next_log() {
-                map.insert(filename, line);
-            } else {
-                map.remove(&filename);
+    let (tx, rx) = mpsc::channel::<LogLine>();
+    let files = files
+        .iter()
+        .map(|&s| s.to_string())
+        .collect::<Vec<String>>();
+    let pattern = pattern.to_string();
+
+    thread::spawn(move || {
+        let mut sorted_set: BTreeSet<LogLine> = BTreeSet::new();
+        let mut readers = files
+            .iter()
+            .map(|path| {
+                (
+                    path.to_string(),
+                    WrappedFileReader::new(path.as_str(), pattern.as_str(), false),
+                )
+            })
+            .collect::<HashMap<String, WrappedFileReader>>();
+
+        // read head line from files
+        let empty_files = readers
+            .values_mut()
+            .map(|reader| {
+                let filename = reader.filename();
+                if let Log::Line(line) = reader.next_log() {
+                    sorted_set.insert(LogLine::new(&filename, &line));
+                    None
+                } else {
+                    // read to end of file
+                    // remove reader from list
+                    Some(filename)
+                }
+            })
+            .filter(|o| o.is_some())
+            .map(|o| o.unwrap())
+            .collect::<Vec<String>>();
+
+        for empty_file in empty_files {
+            info!("finish reader {}", empty_file);
+            readers.remove(&empty_file);
+        }
+
+        while !readers.is_empty() || !sorted_set.is_empty() {
+            if let Some((filename, line)) = sorted_set
+                .iter()
+                .map(|v| (v.filename().to_string(), v.value().to_string()))
+                .next()
+            {
+                let v = LogLine::new(&filename, &line);
+                sorted_set.remove(&v);
+                tx.send(v).unwrap();
+
+                if let Some(reader) = readers.get_mut(&filename) {
+                    if let Log::Line(line) = reader.next_log() {
+                        sorted_set.insert(LogLine::new(&filename, &line));
+                    } else {
+                        // read to end of file
+                        // remove reader from list
+                        info!("finish reader {}", filename);
+                        readers.remove(&filename);
+                    }
+                } else if let Some(reader) = readers.values_mut().last() {
+                    if let Log::Line(line) = reader.next_log() {
+                        sorted_set.insert(LogLine::new(&filename, &line));
+                    } else {
+                        // read to end of file
+                        // remove reader from list
+                        info!("finish reader {}", filename);
+                        readers.remove(&filename);
+                    }
+                }
             }
         }
     });
 
     loop {
-        if let Option::Some((key, value)) = map
-            .iter()
-            .min_by(|&(_, v1), &(_, v2)| v1.cmp(v2))
-            .map(|(k, v)| (k.clone(), v.clone()))
-        {
+        if let Ok(line) = rx.recv() {
+            let value = line.value();
             let log_time = NaiveDateTime::parse_from_str(&value[0..23], log_time_format).unwrap(); // TODO: slice time issue, need by variable
             let log_hour = log_time.timestamp() / Duration::hours(1).num_seconds();
 
             writer.write(log_hour, &value);
-
-            // map.remove(&key);
-            last_reader = key.to_string();
         } else {
             break;
-        }
-
-        // read next
-        let reader = readers.get_mut(&last_reader).unwrap();
-        let filename = reader.filename();
-        if let Log::Line(line) = reader.next_log() {
-            map.insert(filename, line);
-        } else {
-            // read to end of file
-            map.remove(&filename);
-            // remove reader from list
-            readers.remove(&last_reader);
         }
     }
 
@@ -409,5 +444,49 @@ impl NextLogLineFinder for WrappedFileReader {
                 self.next_log()
             }
         }
+    }
+}
+
+#[derive(Eq)]
+struct LogLine {
+    file: String,
+    line: String,
+}
+
+impl LogLine {
+    fn new(file: &str, line: &str) -> LogLine {
+        LogLine {
+            file: file.to_string(),
+            line: line.to_string(),
+        }
+    }
+    fn filename(&self) -> String {
+        self.file.to_string()
+    }
+    fn value(&self) -> String {
+        self.line.to_string()
+    }
+}
+
+impl Display for LogLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.line)
+    }
+}
+
+impl Ord for LogLine {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        self.line.cmp(&other.line)
+    }
+}
+
+impl PartialOrd for LogLine {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl PartialEq for LogLine {
+    fn eq(&self, other: &Self) -> bool {
+        self.line == other.line
     }
 }
