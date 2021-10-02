@@ -11,7 +11,7 @@ use std::{
 
 use chrono::{Duration, NaiveDateTime};
 use flate2::{bufread::GzDecoder, write::GzEncoder, Compression};
-use log::info;
+use log::{debug, info};
 use regex::Regex;
 
 fn main() -> Result<()> {
@@ -61,7 +61,7 @@ fn read_and_print5(
 ) -> Result<()> {
     let mut writer = WrappedFileWriter::new(output_file_pattern, true);
 
-    let (tx, rx) = mpsc::channel::<LogLine>();
+    let (tx, rx) = mpsc::sync_channel::<String>(500);
     let files = files
         .iter()
         .map(|&s| s.to_string())
@@ -80,10 +80,13 @@ fn read_and_print5(
             })
             .collect::<HashMap<String, WrappedFileReader>>();
 
+        let file_count = files.len();
+        let mut file_done_count = 0;
+
         // read head line from files
         let empty_files = readers
             .values_mut()
-            .map(|reader| {
+            .filter_map(|reader| {
                 let filename = reader.filename();
                 if let Log::Line(line) = reader.next_log() {
                     sorted_set.insert(LogLine::new(&filename, &line));
@@ -94,24 +97,26 @@ fn read_and_print5(
                     Some(filename)
                 }
             })
-            .filter(|o| o.is_some())
-            .map(|o| o.unwrap())
             .collect::<Vec<String>>();
 
         for empty_file in empty_files {
-            info!("finish reader {}", empty_file);
+            file_done_count = file_done_count + 1;
+            debug!(
+                "finish reader {}/{} {}",
+                file_done_count, file_count, empty_file
+            );
             readers.remove(&empty_file);
         }
 
         while !readers.is_empty() || !sorted_set.is_empty() {
             if let Some((filename, line)) = sorted_set
                 .iter()
-                .map(|v| (v.filename().to_string(), v.value().to_string()))
                 .next()
+                .map(|v| (v.filename().to_string(), v.value().to_string()))
             {
                 let v = LogLine::new(&filename, &line);
                 sorted_set.remove(&v);
-                tx.send(v).unwrap();
+                tx.send(line).unwrap();
 
                 if let Some(reader) = readers.get_mut(&filename) {
                     if let Log::Line(line) = reader.next_log() {
@@ -119,7 +124,11 @@ fn read_and_print5(
                     } else {
                         // read to end of file
                         // remove reader from list
-                        info!("finish reader {}", filename);
+                        file_done_count = file_done_count + 1;
+                        debug!(
+                            "finish reader {}/{} {}",
+                            file_done_count, file_count, filename
+                        );
                         readers.remove(&filename);
                     }
                 } else if let Some(reader) = readers.values_mut().last() {
@@ -128,7 +137,11 @@ fn read_and_print5(
                     } else {
                         // read to end of file
                         // remove reader from list
-                        info!("finish reader {}", filename);
+                        file_done_count = file_done_count + 1;
+                        debug!(
+                            "finish reader {}/{} {}",
+                            file_done_count, file_count, filename
+                        );
                         readers.remove(&filename);
                     }
                 }
@@ -136,16 +149,12 @@ fn read_and_print5(
         }
     });
 
-    loop {
-        if let Ok(line) = rx.recv() {
-            let value = line.value();
-            let log_time = NaiveDateTime::parse_from_str(&value[0..23], log_time_format).unwrap(); // TODO: slice time issue, need by variable
-            let log_hour = log_time.timestamp() / Duration::hours(1).num_seconds();
+    let seconds_an_hour = Duration::hours(1).num_seconds();
+    for value in rx {
+        let log_time = NaiveDateTime::parse_from_str(&value[0..23], log_time_format).unwrap(); // TODO: slice time issue, need by variable
+        let log_hour = log_time.timestamp() / seconds_an_hour;
 
-            writer.write(log_hour, &value);
-        } else {
-            break;
-        }
+        writer.write(log_hour, &value);
     }
 
     writer.flush();
