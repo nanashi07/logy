@@ -18,11 +18,11 @@ pub fn trace_log(
     trace_pattern: &str,
     output_file_pattern: &str,
 ) -> Result<()> {
-    let mut map: HashMap<String, LogDuration> = HashMap::new();
     let re = Regex::new(trace_pattern).unwrap();
 
     for &file in files {
         info!("Load file {} to collect cost time", file);
+        let mut log_groups: HashMap<String, LogDuration> = HashMap::new();
         let mut reader = WrappedFileReader::new(file, pattern, true);
         while let Log::Line(line) = reader.next_log() {
             if let Some(captures) = re.captures(line.as_str()) {
@@ -30,30 +30,30 @@ pub fn trace_log(
                 // TODO: slice time issue, need by variable
                 let log_time =
                     NaiveDateTime::parse_from_str(&line.clone()[0..23], log_time_format).unwrap();
-                let log_time_milli = log_time.timestamp_millis();
+                let log_time_millis = log_time.timestamp_millis();
 
-                if let Some(item) = map.get(&trace_id) {
+                if let Some(item) = log_groups.get(&trace_id) {
                     let newone = LogDuration {
                         trace_id: item.trace_id.to_string(),
-                        start_time: cmp::min(item.start_time, log_time_milli),
-                        end_time: cmp::max(item.end_time, log_time_milli),
+                        start_time: cmp::min(item.start_time, log_time_millis),
+                        end_time: cmp::max(item.end_time, log_time_millis),
                     };
-                    &map.insert(trace_id, newone);
+                    &log_groups.insert(trace_id, newone);
                 } else {
-                    &map.insert(
+                    &log_groups.insert(
                         trace_id.clone(),
                         LogDuration {
                             trace_id: trace_id.clone(),
-                            start_time: log_time_milli,
-                            end_time: log_time_milli,
+                            start_time: log_time_millis,
+                            end_time: log_time_millis,
                         },
                     );
                 }
             }
         }
 
-        info!("{} entries collected", map.len());
-        let mut filtered = map
+        info!("{} entries collected", log_groups.len());
+        let mut long_duration_logs = log_groups
             .values()
             .filter(|&d| d.end_time - d.start_time > min_cost_time)
             .map(|d| {
@@ -67,9 +67,12 @@ pub fn trace_log(
                 )
             })
             .collect::<HashMap<String, LogDuration>>();
+
+        log_groups.clear();
+
         info!(
             "{} entries cost time over than {} ms",
-            filtered.len(),
+            long_duration_logs.len(),
             min_cost_time
         );
 
@@ -84,9 +87,9 @@ pub fn trace_log(
                 // TODO: slice time issue, need by variable
                 let log_time =
                     NaiveDateTime::parse_from_str(&line.clone()[0..23], log_time_format).unwrap();
-                let log_time_milli = log_time.timestamp_millis();
+                let log_time_millis = log_time.timestamp_millis();
 
-                if let Some(_) = filtered.get(&trace_id) {
+                if let Some(_) = long_duration_logs.get(&trace_id) {
                     if let Some(value) = grouped_logs.get_mut(&trace_id) {
                         value.push(line);
                     } else {
@@ -95,15 +98,15 @@ pub fn trace_log(
                 }
 
                 // find ended log and output
-                let reached_ended_logs = filtered
+                let reached_ended_logs = long_duration_logs
                     .values()
-                    .filter(|&duration| duration.end_time < log_time_milli)
+                    .filter(|&duration| duration.end_time < log_time_millis)
                     .map(|duration| duration.trace_id.clone())
                     .collect::<Vec<String>>();
 
                 write_long_logs(
                     &mut writer,
-                    &mut filtered,
+                    &mut long_duration_logs,
                     &mut grouped_logs,
                     &reached_ended_logs,
                 );
@@ -111,12 +114,17 @@ pub fn trace_log(
         }
 
         // output remained
-        let trace_ids = filtered
+        let trace_ids = long_duration_logs
             .keys()
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
 
-        write_long_logs(&mut writer, &mut filtered, &mut grouped_logs, &trace_ids);
+        write_long_logs(
+            &mut writer,
+            &mut long_duration_logs,
+            &mut grouped_logs,
+            &trace_ids,
+        );
 
         info!("finish output time cost logs from {}", file);
     }
@@ -126,13 +134,13 @@ pub fn trace_log(
 
 fn write_long_logs(
     writer: &mut WrappedFileWriter,
-    filtered: &mut HashMap<String, LogDuration>,
+    long_duration_logs: &mut HashMap<String, LogDuration>,
     grouped_logs: &mut HashMap<String, Vec<String>>,
     trace_ids: &Vec<String>,
 ) {
     for trace_id in trace_ids {
         let lines = grouped_logs.get_mut(trace_id).unwrap();
-        let duration = filtered.get(trace_id).unwrap();
+        let duration = long_duration_logs.get(trace_id).unwrap();
         lines.insert(
             0,
             format!(
@@ -146,6 +154,6 @@ fn write_long_logs(
         // write log
         writer.write(log_hour, &lines.join("\n"));
         grouped_logs.remove(trace_id);
-        filtered.remove(trace_id);
+        long_duration_logs.remove(trace_id);
     }
 }
