@@ -14,7 +14,7 @@ use super::models::NextLogLineFinder;
 use super::models::WrappedFileReader;
 use super::models::WrappedFileWriter;
 
-fn trace_log(
+pub fn trace_log(
     files: &Vec<&str>,
     min_cost_time: i64,
     pattern: &str,

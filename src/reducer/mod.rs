@@ -1,10 +1,3 @@
-use super::models::FileNameGetter;
-use super::models::Log;
-use super::models::LogLine;
-use super::models::NextLogLineFinder;
-use super::models::WrappedFileReader;
-use super::models::WrappedFileWriter;
-
 use chrono::{Duration, NaiveDateTime};
 use log::debug;
 use std::{
@@ -13,6 +6,13 @@ use std::{
     sync::mpsc::{self},
     thread,
 };
+
+use super::models::FileNameGetter;
+use super::models::Log;
+use super::models::LogLine;
+use super::models::NextLogLineFinder;
+use super::models::WrappedFileReader;
+use super::models::WrappedFileWriter;
 
 /// read multiple files and compress output
 pub fn reduce_logs(
