@@ -8,11 +8,7 @@ use std::{
     vec,
 };
 
-use super::models::Log;
-use super::models::LogDuration;
-use super::models::NextLogLineFinder;
-use super::models::WrappedFileReader;
-use super::models::WrappedFileWriter;
+use super::models::{Log, LogDuration, NextLogLineFinder, WrappedFileReader, WrappedFileWriter};
 
 pub fn trace_log(
     files: &Vec<&str>,
@@ -57,7 +53,7 @@ pub fn trace_log(
         }
 
         info!("{} entries collected", map.len());
-        let filtered = map
+        let mut filtered = map
             .values()
             .filter(|&d| d.end_time - d.start_time > min_cost_time)
             .map(|d| {
@@ -72,7 +68,7 @@ pub fn trace_log(
             })
             .collect::<HashMap<String, LogDuration>>();
         info!(
-            "{} entries cost time over than {}",
+            "{} entries cost time over than {} ms",
             filtered.len(),
             min_cost_time
         );
@@ -89,35 +85,67 @@ pub fn trace_log(
                 let log_time =
                     NaiveDateTime::parse_from_str(&line.clone()[0..23], log_time_format).unwrap();
                 let log_time_milli = log_time.timestamp_millis();
-                let log_hour = log_time_milli / Duration::hours(1).num_milliseconds();
 
-                if let Some(duration) = filtered.get(&trace_id) {
+                if let Some(_) = filtered.get(&trace_id) {
                     if let Some(value) = grouped_logs.get_mut(&trace_id) {
                         value.push(line);
                     } else {
                         grouped_logs.insert(trace_id.clone(), vec![line]);
                     }
-
-                    // TODO: compare time
-                    if log_time_milli >= duration.end_time {
-                        let v = grouped_logs.get_mut(&trace_id).unwrap();
-                        v.insert(
-                            0,
-                            format!(
-                                "========================= {} =========================",
-                                Duration::milliseconds(duration.end_time - duration.start_time)
-                            ),
-                        );
-                        v.push("\n".repeat(3));
-                        // write log
-                        writer.write(log_hour, &v.join("\n"));
-                        grouped_logs.remove(&trace_id);
-                    }
                 }
+
+                // find ended log and output
+                let reached_ended_logs = filtered
+                    .values()
+                    .filter(|&duration| duration.end_time < log_time_milli)
+                    .map(|duration| duration.trace_id.clone())
+                    .collect::<Vec<String>>();
+
+                write_long_logs(
+                    &mut writer,
+                    &mut filtered,
+                    &mut grouped_logs,
+                    &reached_ended_logs,
+                );
             }
         }
+
+        // output remained
+        let trace_ids = filtered
+            .keys()
+            .map(|s| s.to_string())
+            .collect::<Vec<String>>();
+
+        write_long_logs(&mut writer, &mut filtered, &mut grouped_logs, &trace_ids);
+
         info!("finish output time cost logs from {}", file);
     }
 
     Ok(())
+}
+
+fn write_long_logs(
+    writer: &mut WrappedFileWriter,
+    filtered: &mut HashMap<String, LogDuration>,
+    grouped_logs: &mut HashMap<String, Vec<String>>,
+    trace_ids: &Vec<String>,
+) {
+    for trace_id in trace_ids {
+        let lines = grouped_logs.get_mut(trace_id).unwrap();
+        let duration = filtered.get(trace_id).unwrap();
+        lines.insert(
+            0,
+            format!(
+                "========================= {} =========================",
+                Duration::milliseconds(duration.end_time - duration.start_time)
+            ),
+        );
+        lines.push("\n".repeat(3));
+
+        let log_hour = duration.end_time / Duration::hours(1).num_milliseconds();
+        // write log
+        writer.write(log_hour, &lines.join("\n"));
+        grouped_logs.remove(trace_id);
+        filtered.remove(trace_id);
+    }
 }
