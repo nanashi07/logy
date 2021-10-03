@@ -11,13 +11,13 @@ use std::{
 };
 
 #[derive(Debug)]
-pub struct LogDuration {
+pub(crate) struct LogDuration {
     pub trace_id: String,
     pub start_time: i64,
     pub end_time: i64,
 }
 
-pub struct WrappedFileWriter {
+pub(crate) struct WrappedFileWriter {
     // controls output file is compressed, value is from 0 to 9
     compress_level: u32,
     // last output file name
@@ -109,7 +109,7 @@ impl WrappedFileWriter {
     }
 }
 
-pub struct WrappedFileReader {
+pub(crate) struct WrappedFileReader {
     file: String,
     pattern: Regex,
     reader: Box<dyn BufRead>,
@@ -133,15 +133,15 @@ impl WrappedFileReader {
     }
 }
 
-pub trait FileNameGetter {
+pub(crate) trait FileNameGetter {
     fn filename(&self) -> String;
 }
 
-pub enum Log {
+pub(crate) enum Log {
     EOF,
     Line(String),
 }
-pub trait NextLogLineFinder {
+pub(crate) trait NextLogLineFinder {
     fn next_log(&mut self) -> Log;
 }
 
@@ -180,7 +180,7 @@ impl NextLogLineFinder for WrappedFileReader {
 }
 
 #[derive(Eq)]
-pub struct LogLine {
+pub(crate) struct LogLine {
     file: String,
     line: String,
 }
