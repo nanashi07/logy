@@ -1,9 +1,10 @@
 use chrono::{Duration, NaiveDateTime};
 use log::debug;
+use regex::Regex;
 use std::{
     collections::{BTreeSet, HashMap},
     io::Result,
-    sync::mpsc::{self},
+    sync::mpsc,
     thread,
 };
 
@@ -27,6 +28,7 @@ pub fn reduce_logs(
         .map(|&s| s.to_string())
         .collect::<Vec<String>>();
     let pattern = pattern.to_string();
+    let parse_log_time_pattern = Regex::new(&pattern.clone()).unwrap();
 
     thread::spawn(move || {
         let mut sorted_set: BTreeSet<LogLine> = BTreeSet::new();
@@ -109,7 +111,14 @@ pub fn reduce_logs(
 
     let seconds_an_hour = Duration::hours(1).num_seconds();
     for value in rx {
-        let log_time = NaiveDateTime::parse_from_str(&value[0..23], log_time_format).unwrap(); // TODO: slice time issue, need by variable
+        let log_time_string = parse_log_time_pattern
+            .captures(&value)
+            .unwrap()
+            .get(1)
+            .unwrap()
+            .as_str()
+            .to_string();
+        let log_time = NaiveDateTime::parse_from_str(&log_time_string, log_time_format).unwrap();
         let log_hour = log_time.timestamp() / seconds_an_hour;
 
         writer.write(log_hour, &value);

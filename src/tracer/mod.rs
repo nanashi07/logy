@@ -1,12 +1,7 @@
 use chrono::{Duration, NaiveDateTime};
 use log::info;
 use regex::Regex;
-use std::{
-    cmp::{self},
-    collections::HashMap,
-    io::Result,
-    vec,
-};
+use std::{cmp, collections::HashMap, io::Result, vec};
 
 use super::models::{Log, LogDuration, NextLogLineFinder, WrappedFileReader, WrappedFileWriter};
 
@@ -19,17 +14,24 @@ pub fn trace_log(
     output_file_pattern: &str,
 ) -> Result<()> {
     let re = Regex::new(trace_pattern).unwrap();
+    let parse_log_time_pattern = Regex::new(&pattern.to_string()).unwrap();
 
     for &file in files {
-        info!("Load file {} to collect cost time", file);
+        info!("load file {} to collect cost time", file);
         let mut log_groups: HashMap<String, LogDuration> = HashMap::new();
         let mut reader = WrappedFileReader::new(file, pattern, true);
         while let Log::Line(line) = reader.next_log() {
             if let Some(captures) = re.captures(line.as_str()) {
                 let trace_id = captures.get(1).unwrap().as_str().to_string();
-                // TODO: slice time issue, need by variable
+                let log_time_string = parse_log_time_pattern
+                    .captures(&line)
+                    .unwrap()
+                    .get(1)
+                    .unwrap()
+                    .as_str()
+                    .to_string();
                 let log_time =
-                    NaiveDateTime::parse_from_str(&line.clone()[0..23], log_time_format).unwrap();
+                    NaiveDateTime::parse_from_str(&log_time_string, log_time_format).unwrap();
                 let log_time_millis = log_time.timestamp_millis();
 
                 if let Some(item) = log_groups.get(&trace_id) {
@@ -80,13 +82,19 @@ pub fn trace_log(
         reader = WrappedFileReader::new(file, pattern, true);
         let mut writer = WrappedFileWriter::new(output_file_pattern, 0);
 
-        info!("start to output time cost logs from {}", file);
+        info!("start to output long process logs from {}", file);
         while let Log::Line(line) = reader.next_log() {
             if let Some(captures) = re.captures(line.as_str()) {
                 let trace_id = captures.get(1).unwrap().as_str().to_string();
-                // TODO: slice time issue, need by variable
+                let log_time_string = parse_log_time_pattern
+                    .captures(&line)
+                    .unwrap()
+                    .get(1)
+                    .unwrap()
+                    .as_str()
+                    .to_string();
                 let log_time =
-                    NaiveDateTime::parse_from_str(&line.clone()[0..23], log_time_format).unwrap();
+                    NaiveDateTime::parse_from_str(&log_time_string, log_time_format).unwrap();
                 let log_time_millis = log_time.timestamp_millis();
 
                 if let Some(_) = long_duration_logs.get(&trace_id) {
@@ -126,7 +134,7 @@ pub fn trace_log(
             &trace_ids,
         );
 
-        info!("finish output time cost logs from {}", file);
+        info!("finish output long process logs from {}", file);
     }
 
     Ok(())
