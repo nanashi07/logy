@@ -5,7 +5,7 @@ use regex::Regex;
 use std::{
     cmp::{self, min},
     fmt::Display,
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, BufWriter, Write},
     path::Path,
 };
@@ -32,13 +32,10 @@ pub(crate) struct WrappedFileWriter {
 
 impl WrappedFileWriter {
     pub fn new(filename_pattern: &str, compress_level: u32) -> WrappedFileWriter {
-        let file = WrappedFileWriter::as_filename(filename_pattern, 0, compress_level);
+        let (file, appendable) =
+            WrappedFileWriter::as_filename(filename_pattern, 0, compress_level);
         let filename = file.as_str();
 
-        if Path::new(filename).exists() {
-            info!("remove file {}", filename);
-            fs::remove_file(filename).unwrap();
-        }
         info!("create file {}", filename);
 
         WrappedFileWriter {
@@ -46,20 +43,15 @@ impl WrappedFileWriter {
             filename: filename.to_string(),
             pattern: filename_pattern.to_string(),
             empty_content: true,
-            writer: WrappedFileWriter::create_writer(filename, compress_level),
+            writer: WrappedFileWriter::create_writer(filename, appendable, compress_level),
         }
     }
 
     pub fn write(&mut self, log_hour: i64, line: &str) {
-        let filename =
+        let (filename, appendable) =
             WrappedFileWriter::as_filename(self.pattern.as_str(), log_hour, self.compress_level);
         if self.filename != filename {
             self.writer.flush().unwrap();
-
-            if Path::new(&filename).exists() {
-                info!("remove file {}", filename);
-                fs::remove_file(&filename).unwrap();
-            }
 
             // check file size and remove zero size file
             let previous_file = self.filename.as_str();
@@ -74,33 +66,45 @@ impl WrappedFileWriter {
 
             info!("create file {}", filename);
             self.filename = filename;
-            self.writer =
-                WrappedFileWriter::create_writer(self.filename.as_str(), self.compress_level)
+            self.writer = WrappedFileWriter::create_writer(
+                self.filename.as_str(),
+                appendable,
+                self.compress_level,
+            )
         }
         // self.writer.write_all(line.as_bytes()).unwrap();
         writeln!(self.writer, "{}", line).unwrap();
         self.empty_content = false
     }
 
-    fn as_filename(log_file_pattern: &str, log_hour: i64, compress_level: u32) -> String {
+    fn as_filename(log_file_pattern: &str, log_hour: i64, compress_level: u32) -> (String, bool) {
         let pattern = log_file_pattern.to_owned() + if compress_level > 0 { ".gz" } else { "" };
         let file_time =
             NaiveDateTime::from_timestamp(log_hour * Duration::hours(1).num_seconds(), 0);
-        format!("{}", file_time.format(pattern.as_str()))
+        let new_file = format!("{}", file_time.format(pattern.as_str()));
+        (new_file.clone(), new_file == pattern)
     }
 
-    fn create_writer(filename: &str, compress_level: u32) -> Box<dyn Write> {
+    fn create_writer(filename: &str, appendable: bool, compress_level: u32) -> Box<dyn Write> {
         if !Path::new(filename).parent().unwrap().exists() {
             fs::create_dir_all(Path::new(filename).parent().unwrap()).unwrap();
         }
 
+        let file = OpenOptions::new()
+            .write(true)
+            .append(appendable)
+            .truncate(!appendable)
+            .create(true)
+            .open(filename)
+            .unwrap();
+
         if compress_level > 0 {
             Box::new(GzEncoder::new(
-                BufWriter::new(File::create(filename).unwrap()),
+                BufWriter::new(file),
                 Compression::new(min(9, compress_level)),
             ))
         } else {
-            Box::new(BufWriter::new(File::create(filename).unwrap()))
+            Box::new(BufWriter::new(file))
         }
     }
 

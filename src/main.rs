@@ -29,8 +29,8 @@ fn main() -> Result<()> {
             info!("task done");
         } else {
             error!("No source file provided");
-            return Ok(());
         }
+        return Ok(());
     } else if let Some(args) = arg_matches.subcommand_matches("trace") {
         if let Some(files) = args.values_of("files") {
             tracer::trace_log(
@@ -47,8 +47,8 @@ fn main() -> Result<()> {
             info!("task done");
         } else {
             error!("No source file provided");
-            return Ok(());
         }
+        return Ok(());
     }
 
     app.print_help().unwrap();
